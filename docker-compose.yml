@@ -1,0 +1,22 @@
+services:
+  guangya-api:
+    build: .
+    image: guangyaclient-api:latest
+    container_name: guangya-api
+    restart: always
+    # 不映射宿主机端口：仅 tgapi_n8n_network 内部可访问，公网无法访问
+    user: "1000:1000"        # 与 /opt/guangya_data 属主一致（不想用 1000 可删掉此行）
+    env_file:
+      - .env                 # 复制 .env.example 为 .env 并填写
+    environment:
+      APP_HOST: 0.0.0.0      # 容器内必须监听 0.0.0.0
+      APP_PORT: 8000
+      TOKEN_FILE: data/tokens.json
+    volumes:
+      - /opt/guangya_data:/app/data     # 持久化 token，重启不丢
+    networks:
+      - tgapi_n8n_network
+
+networks:
+  tgapi_n8n_network:
+    external: true

@@ -1,0 +1,43 @@
+# 80 端口：强制跳转到 HTTPS
+server {
+    listen 80;
+    server_name your_n8n_domain;
+    return 301 https://$host$request_uri;
+}
+
+# 443 端口：使用 Cloudflare 源站证书
+server {
+    listen 443 ssl;
+    server_name your_n8n_domain;
+
+    # 引用你上传的 Cloudflare 源站证书
+    ssl_certificate     /etc/nginx/ssl/your_pem;
+    ssl_certificate_key /etc/nginx/ssl/your_key;
+
+    # 协议和加密套件（Cloudflare 推荐）
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # n8n 反向代理配置
+    location / {
+        proxy_pass http://127.0.0.1:5678;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # MCP SSE 端点（保留你原来的）
+    location ~* ^/mcp {
+        proxy_pass http://127.0.0.1:5678;
+        proxy_buffering off;
+        gzip off;
+        chunked_transfer_encoding off;
+        proxy_set_header Connection "";
+    }
+}
