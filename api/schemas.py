@@ -289,6 +289,41 @@ class TaskIdRequest(BaseModel):
     task_id: str = Field(..., description="异步任务 ID，来自 copy/move/delete 等返回的 taskId")
 
 
+class UploadPathRequest(BaseModel):
+    """按服务器本地文件路径上传（不经过 multipart，适合 1GB+ 大文件）。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "file_path": "/data/incoming/movie.mp4",
+                "name": "",
+                "parent_id": "",
+                "content_type": "",
+                "chunk_size": 8388608,
+            }
+        }
+    )
+
+    file_path: str = Field(
+        ...,
+        description=(
+            "服务器本地文件路径（绝对路径或相对进程工作目录）。"
+            "文件需对被上传的容器/进程可读；大文件请用此接口，"
+            "可省去 multipart 落盘的一份临时拷贝。"
+        ),
+    )
+    name: Optional[str] = Field(
+        None, description="保存到云盘的文件名，缺省用 file_path 的文件名"
+    )
+    parent_id: ParentId = Field(None, description=PARENT_ID_DESC)
+    content_type: Optional[str] = Field(
+        None, description="文件 MIME 类型，缺省按扩展名推断，再退化为 octet-stream"
+    )
+    chunk_size: Optional[int] = Field(
+        None, description="分片大小（字节），缺省用服务端配置（默认 8MB）"
+    )
+
+
 # ===== Cloud download =====
 
 

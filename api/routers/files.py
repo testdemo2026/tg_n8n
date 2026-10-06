@@ -1,4 +1,6 @@
+import mimetypes
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +9,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
-from ..dependencies import ClientDep
+from ..config import Settings
+from ..dependencies import ClientDep, SettingsDep
 from ..schemas import (
     CopyMoveRequest,
     CreateDirRequest,
@@ -18,6 +21,7 @@ from ..schemas import (
     RenameRequest,
     TaskIdRequest,
     TypeListRequest,
+    UploadPathRequest,
 )
 from ..utils import coerce_file_ids, coerce_parent_id, find_url
 
@@ -186,6 +190,20 @@ def download(file_id: str, client: ClientDep):
 
 _PLACEHOLDERS = {"string", "null", "none", "undefined", "n/a"}
 
+_FALLBACK_CHUNK_SIZE = 8 * 1024 * 1024
+
+_upload_sem_lock = threading.Lock()
+_upload_sem: Optional[threading.BoundedSemaphore] = None
+
+
+def _upload_semaphore(limit: int) -> threading.BoundedSemaphore:
+    """进程内限制并发上传数（1 vCPU / 1 GB 内存的小机器）。"""
+    global _upload_sem
+    with _upload_sem_lock:
+        if _upload_sem is None:
+            _upload_sem = threading.BoundedSemaphore(max(1, limit))
+        return _upload_sem
+
 
 def _clean_form(value: Optional[str]) -> Optional[str]:
     if value is None:
@@ -196,33 +214,52 @@ def _clean_form(value: Optional[str]) -> Optional[str]:
     return text
 
 
-@router.post("/upload", summary="上传文件（自动秒传/分片）")
-def upload(
-    client: ClientDep,
-    file: UploadFile = File(...),
-    name: Optional[str] = Form(None),
-    parent_id: Optional[str] = Form(None),
-    content_type: Optional[str] = Form(None),
-    chunk_size: int = Form(5 * 1024 * 1024),
-):
-    file_name = _clean_form(name) or file.filename or "upload.bin"
-    parent = coerce_parent_id(_clean_form(parent_id))
-    mime = _clean_form(content_type) or file.content_type or "application/octet-stream"
-    if not chunk_size or chunk_size <= 0:
-        chunk_size = 5 * 1024 * 1024
+def _resolve_chunk_size(value: Optional[int], settings: Settings) -> int:
+    size = value or settings.upload_chunk_size or _FALLBACK_CHUNK_SIZE
+    return size if size > 0 else _FALLBACK_CHUNK_SIZE
 
-    suffix = Path(file_name).suffix
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+
+def _resolve_tmp_dir(settings: Settings) -> Optional[str]:
+    raw = (settings.upload_tmp_dir or "").strip()
+    if not raw:
+        return None
+    tmp_dir = Path(raw).expanduser()
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    return str(tmp_dir)
+
+
+def _resolve_upload_path(raw: str, settings: Settings) -> Path:
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
     try:
-        while chunk := file.file.read(1024 * 1024):
-            tmp.write(chunk)
-        tmp.close()
+        path = path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise HTTPException(status_code=404, detail=f"文件不存在: {raw}") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=400, detail=f"不是文件: {raw}")
+
+    root = (settings.upload_root or "").strip()
+    if root:
+        root_path = Path(root).expanduser()
+        if not root_path.is_absolute():
+            root_path = Path.cwd() / root_path
+        root_path = root_path.resolve()
+        if path != root_path and root_path not in path.parents:
+            raise HTTPException(
+                status_code=403, detail=f"路径不在允许的上传目录内: {root}"
+            )
+    return path
+
+
+def _run_upload(client, path, name, parent_id, content_type, chunk_size, settings):
+    with _upload_semaphore(settings.max_concurrent_uploads):
         try:
             return client.file_upload(
-                tmp.name,
-                name=file_name,
-                parent_id=parent,
-                content_type=mime,
+                path,
+                name=name,
+                parent_id=parent_id,
+                content_type=content_type,
                 chunk_size=chunk_size,
             )
         except httpx.HTTPStatusError as exc:
@@ -233,5 +270,62 @@ def upload(
             raise HTTPException(
                 status_code=502, detail=f"上游返回缺少字段: {exc}"
             ) from exc
+
+
+@router.post("/upload", summary="上传文件（multipart，自动秒传/分片）")
+def upload(
+    client: ClientDep,
+    settings: SettingsDep,
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    parent_id: Optional[str] = Form(None),
+    content_type: Optional[str] = Form(None),
+    chunk_size: Optional[int] = Form(None),
+):
+    file_name = _clean_form(name) or file.filename or "upload.bin"
+    parent = coerce_parent_id(_clean_form(parent_id))
+    mime = _clean_form(content_type) or file.content_type or "application/octet-stream"
+    size = _resolve_chunk_size(chunk_size, settings)
+
+    suffix = Path(file_name).suffix
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, suffix=suffix, dir=_resolve_tmp_dir(settings)
+    )
+    try:
+        while chunk := file.file.read(1024 * 1024):
+            tmp.write(chunk)
+        tmp.close()
+        return _run_upload(
+            client, tmp.name, file_name, parent, mime, size, settings
+        )
     finally:
         Path(tmp.name).unlink(missing_ok=True)
+
+
+@router.post(
+    "/upload/path",
+    summary="按服务器文件路径上传（推荐大文件）",
+    description=(
+        "直接读取服务器本地文件上传，无需 multipart，省去一份临时拷贝，"
+        "适合 1GB+ 大文件。默认分片 8MB（可用 `chunk_size` 覆盖）。\n\n"
+        "`file_path` 需对本服务进程可读；设置 `UPLOAD_ROOT` 可限制允许的根目录。"
+    ),
+)
+def upload_by_path(body: UploadPathRequest, client: ClientDep, settings: SettingsDep):
+    path = _resolve_upload_path(body.file_path, settings)
+    file_name = _clean_form(body.name) or path.name
+    mime = (
+        _clean_form(body.content_type)
+        or mimetypes.guess_type(str(path))[0]
+        or "application/octet-stream"
+    )
+    size = _resolve_chunk_size(body.chunk_size, settings)
+    return _run_upload(
+        client,
+        path,
+        file_name,
+        coerce_parent_id(body.parent_id),
+        mime,
+        size,
+        settings,
+    )

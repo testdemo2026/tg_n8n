@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from guangyaclient import FILE_TYPE, FILE_TYPE_NAME, __version__
@@ -13,9 +14,13 @@ from .token_store import load_tokens
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    tmp_dir = (settings.upload_tmp_dir or "").strip()
+    if tmp_dir:
+        Path(tmp_dir).expanduser().mkdir(parents=True, exist_ok=True)
     tokens = load_tokens(settings)
     client = PersistentGuangyaClient(
         on_change=lambda c: persist_tokens(c, settings),
+        timeout=settings.upload_timeout,
         access_token=tokens.get("access_token") or settings.access_token or None,
         refresh_token=tokens.get("refresh_token") or settings.refresh_token or None,
         device_id=tokens.get("device_id") or settings.device_id or None,

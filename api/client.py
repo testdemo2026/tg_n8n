@@ -1,13 +1,23 @@
 from typing import Callable, Optional
 
+import httpx
 from guangyaclient import GuangyaClient
 
 
 class PersistentGuangyaClient(GuangyaClient):
     """在 token 发生变化时（登录/刷新/401 自动刷新）自动回调持久化。"""
 
-    def __init__(self, on_change: Callable[["PersistentGuangyaClient"], None], **kwargs):
+    def __init__(
+        self,
+        on_change: Callable[["PersistentGuangyaClient"], None],
+        timeout: Optional[float] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
+        if timeout and timeout > 0:
+            self._client.timeout = httpx.Timeout(
+                connect=10.0, read=timeout, write=timeout, pool=10.0
+            )
         self._on_change = on_change
         self._snapshot = self._state()
 

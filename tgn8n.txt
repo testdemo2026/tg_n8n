@@ -10,6 +10,6 @@ docker run -d --name=tgapi --network tgapi_n8n_network --restart=always -v /opt/
 
 docker run -d --name n8n --network tgapi_n8n_network --restart always -p 5678:5678 -v /opt/n8n_data:/home/node/.n8n -v /opt/tgapi_data:/var/lib/telegram-bot-api -e PUID=1000 -e PGID=1000 -e TZ=Asia/Shanghai -e GENERIC_TIMEZONE=Asia/Shanghai -e N8N_WEBHOOK_URL=your_n8n_domain -e N8N_RESTRICT_FILE_ACCESS_TO=/var/lib/telegram-bot-api solodolobolo/n8n:latest
 
-docker run -d --name gyapi --network tgapi_n8n_network --restart always --user 1000:1000 --env-file .env -e APP_HOST=0.0.0.0 -v /opt/gyapi_data:/app/data guangyaclient-api:latest
+docker run -d --name gyapi --network tgapi_n8n_network --restart always --user 1000:1000 --env-file .env -e APP_HOST=0.0.0.0 -e TMPDIR=/app/data/tmp -v /opt/gyapi_data:/app/data -v /opt/tgapi_data:/var/lib/telegram-bot-api guangyaclient-api:latest
 
 

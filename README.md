@@ -263,6 +263,7 @@ curl -X POST http://127.0.0.1:8000/auth/token \
 | `fs_clear_recycle_bin()` | `POST /files/recycle/clear` | 清空回收站 |
 | `get_task_status(task_id)` | `POST /files/task/status` | 获取任务状态 |
 | `file_upload(...)` | `POST /upload` | 上传文件（multipart，自动秒传/分片） |
+| `file_upload(...)` | `POST /upload/path` | 按服务器本地路径上传（推荐大文件） |
 | `download_url(file_id)` | `POST /download/url` | 获取文件下载直链 |
 | （服务端中转） | `GET /download/{file_id}` | 下载文件（流式转发） |
 
@@ -282,7 +283,29 @@ curl -X POST http://127.0.0.1:8000/files/mkdir \
 # 上传文件
 curl -X POST http://127.0.0.1:8000/upload \
   -F "file=@D:/test.mp4" -F "parent_id=" 
+
+# 按服务器本地路径上传（大文件推荐：省去一份临时拷贝）
+curl -X POST http://127.0.0.1:8000/upload/path \
+  -H "Content-Type: application/json" \
+  -d '{"file_path": "/data/incoming/test.mp4", "parent_id": ""}'
 ```
+
+### 上传调优（1 vCPU / 1 GB 内存 / 24 GB 磁盘）
+
+两个上传接口共用 `.env` 里的默认值，默认已按小内存机器 + 1GB+ 大文件调优：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `UPLOAD_CHUNK_SIZE` | `8388608`（8MB） | 分片大小；1GB 文件约 128 片，内存占用可控 |
+| `UPLOAD_TIMEOUT` | `300` | 上传读写超时（秒）。httpx 默认仅 5 秒，大文件会被中断 |
+| `UPLOAD_TMP_DIR` | `data/tmp` | multipart 临时目录；放数据盘，避免写满 `/tmp` |
+| `UPLOAD_ROOT` | 空 | `/upload/path` 允许访问的根目录；留空不限制 |
+| `MAX_CONCURRENT_UPLOADS` | `2` | 同时进行的上传数，避免并发占满小内存 |
+
+建议：
+- 1GB+ 文件优先用 `POST /upload/path`：不经过 multipart，省掉一份落盘拷贝。
+- 若用 `POST /upload`（multipart），注意流量会先由 Starlette 落盘一次、再拷到 `UPLOAD_TMP_DIR` 一次，瞬时约占 2× 文件大小的磁盘。
+- 稳妥起见把 `UPLOAD_ROOT` 设为实际共享目录（如容器里的 `/data/incoming`），避免任意文件被读取。
 
 ### 其他接口
 

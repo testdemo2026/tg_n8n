@@ -12,8 +12,12 @@ services:
       APP_HOST: 0.0.0.0      # 容器内必须监听 0.0.0.0
       APP_PORT: 8000
       TOKEN_FILE: data/tokens.json
+      TMPDIR: /app/data/tmp  # 大文件 multipart 落盘也放数据盘，避免写满 /tmp
     volumes:
       - /opt/guangya_data:/app/data     # 持久化 token，重启不丢
+      # 让 POST /upload/path 能读到 n8n/tgapi 共享的文件（按需保留或删除）。
+      # 若启用，请在 .env 里设 UPLOAD_ROOT=/data/incoming 以限制可读范围。
+      - /opt/tgapi_data:/var/lib/telegram-bot-api
     networks:
       - tgapi_n8n_network
 
