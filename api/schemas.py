@@ -152,6 +152,9 @@ class TokenLoginResponse(BaseModel):
     access_token: Optional[str] = Field(None, description="当前访问令牌")
     refresh_token: Optional[str] = Field(None, description="当前刷新令牌")
     device_id: Optional[str] = Field(None, description="当前设备 ID")
+    verified: Optional[bool] = Field(
+        None, description="是否已真正验证凭据有效（本接口登录时验证）"
+    )
 
 
 class RefreshTokenResponse(BaseModel):
@@ -173,6 +176,40 @@ class UserInfoResponse(BaseModel):
     phone_number: Optional[str] = Field(None, description="手机号（脱敏）")
     created_at: Optional[str] = Field(None, description="创建时间")
     password_updated_at: Optional[str] = Field(None, description="密码更新时间")
+
+
+class AuthStatusResponse(BaseModel):
+    """登录状态。`logged_in` 为本地判断；`verified` 表示是否真的调通了上游接口。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "logged_in": True,
+                "has_access_token": True,
+                "has_refresh_token": True,
+                "expired": False,
+                "expires_at": 1893456000.0,
+                "expires_in": 3600,
+                "refreshed": False,
+                "verified": True,
+                "detail": None,
+            }
+        }
+    )
+
+    logged_in: bool = Field(..., description="是否已登录（本地判断：有 token 且未过期或可刷新）")
+    has_access_token: bool = Field(..., description="是否有 access_token")
+    has_refresh_token: bool = Field(..., description="是否有 refresh_token")
+    expired: bool = Field(..., description="access_token 是否已过期")
+    expires_at: Optional[float] = Field(None, description="access_token 过期时间戳（秒）")
+    expires_in: Optional[int] = Field(None, description="距离过期还有多少秒")
+    refreshed: bool = Field(
+        False, description="本次检查是否触发了 token 刷新（仅 verify=true 时可能为 true）"
+    )
+    verified: bool = Field(
+        False, description="是否真正调通了需要登录的上游接口（仅 verify=true）"
+    )
+    detail: Optional[str] = Field(None, description="验证失败时的原因")
 
 
 # ===== Files =====

@@ -46,7 +46,6 @@ class GuangyaClient:
         self._client = Client(
             headers={
                 "accept": "application/json, text/plain, */*",
-                "authorization": f"Bearer {self.token}",
                 "content-type": "application/json",
                 "did": self.device_id,
                 "dt": "4",
@@ -55,6 +54,14 @@ class GuangyaClient:
                 "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
             }
         )
+        self._sync_auth_header()
+
+    def _sync_auth_header(self) -> None:
+        """同步 authorization 头；token 为空时移除，避免发出非法的 `Bearer `。"""
+        if self.token:
+            self._client.headers["authorization"] = f"Bearer {self.token}"
+        else:
+            self._client.headers.pop("authorization", None)
 
     def close(self):
         self._client.close()
@@ -259,7 +266,7 @@ class GuangyaClient:
         access_token = result.get("access_token")
         if access_token:
             self.token = access_token
-            self._client.headers["authorization"] = f"Bearer {access_token}"
+            self._sync_auth_header()
             expires_in = result.get("expires_in")
             self.token_expires_at = time() + expires_in if expires_in else None
             self.refresh_token_value = result.get("refresh_token")
@@ -290,7 +297,7 @@ class GuangyaClient:
         access_token = result.get("access_token")
         if access_token:
             self.token = access_token
-            self._client.headers["authorization"] = f"Bearer {access_token}"
+            self._sync_auth_header()
             expires_in = result.get("expires_in")
             self.token_expires_at = time() + expires_in if expires_in else None
             self.refresh_token_value = result.get("refresh_token", token)
@@ -333,7 +340,8 @@ class GuangyaClient:
         :return: 用户信息
         """
         headers = self._account_headers()
-        headers["authorization"] = f"Bearer {self.token}"
+        if self.token:
+            headers["authorization"] = f"Bearer {self.token}"
         return get(
             "https://account.guangyapan.com/v1/user/me",
             headers=headers,

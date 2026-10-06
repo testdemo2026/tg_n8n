@@ -38,6 +38,14 @@ class PersistentGuangyaClient(GuangyaClient):
     def sync_snapshot(self):
         self._snapshot = self._state()
 
+    def clear_credentials(self) -> None:
+        """清除内存中的登录凭据（退出登录 / 切换账号用）。"""
+        self.token = ""
+        self.refresh_token_value = None
+        self.token_expires_at = None
+        self._sync_auth_header()
+        self._snapshot = self._state()
+
     def set_credentials(
         self,
         access_token: str,
@@ -46,7 +54,7 @@ class PersistentGuangyaClient(GuangyaClient):
     ) -> None:
         """用 access_token / refresh_token 直接登录（覆盖当前凭据并持久化）。"""
         self.token = access_token or ""
-        self._client.headers["authorization"] = f"Bearer {self.token}"
+        self._sync_auth_header()
         if refresh_token is not None:
             self.refresh_token_value = refresh_token or None
         if device_id:

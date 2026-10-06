@@ -31,3 +31,15 @@ def save_tokens(settings: Settings, tokens: Dict[str, Any]) -> None:
         path.write_text(
             json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+
+def clear_tokens(settings: Settings) -> None:
+    """删除已持久化的凭据（退出/切换账号用）。"""
+    path = Path(settings.token_file)
+    with _lock:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError:
+            pass

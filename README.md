@@ -236,6 +236,14 @@ curl -X POST http://127.0.0.1:8000/auth/token \
   -d '{"access_token":"eyJ...","refresh_token":"gy.xxxx"}'
 ```
 
+本接口登录后会**真正验证一次**凭据（必要时用 refresh_token 自动刷新）：
+- 验证通过 → `200`，返回 `verified: true`；
+- access_token 过期且无法刷新 → `401`；
+- 上游不可达等其它错误 → `502`。
+
+也就是说，`/auth/token` 返回 200 才代表 token 确实可用。若只拿到已过期的 access_token 且没有
+refresh_token，会直接报 401，需要改用短信登录重新获取。
+
 也可以直接在 `.env` 里填 `ACCESS_TOKEN` / `REFRESH_TOKEN` / `DEVICE_ID` 后重启。
 
 ### Token 过期处理
@@ -243,6 +251,47 @@ curl -X POST http://127.0.0.1:8000/auth/token \
 - access_token 过期时，客户端会**自动**用 refresh_token 刷新并用新 token 重试，新 token 会自动落盘。
 - 若 refresh_token 也失效（返回 401 且无法刷新），重新走上面的短信登录即可。
 - 也可手动 `POST /auth/refresh`。
+- `GET /auth/user` 在 access_token 失效时会先刷新再重试；仍失败返回 `401`（不会把上游错误当 200 返回）。
+
+### 检查登录状态（登录前先判断，避免重复登录）
+
+```bash
+# 本地判断，无网络请求
+curl http://127.0.0.1:8000/auth/status
+# -> {"logged_in": true, "has_access_token": true, "has_refresh_token": true,
+#     "expired": false, "expires_in": 3600, "verified": false, ...}
+
+# 真实验证：调一次需要登录的上游接口（必要时自动刷新 token）
+curl "http://127.0.0.1:8000/auth/status?verify=true"
+```
+
+- `logged_in`：本地判断，有 token 且未过期（或可用 refresh_token 刷新）。
+- `expired` / `expires_in`：access_token 是否过期 / 剩余秒数。
+- `verified`：仅 `verify=true` 时可能为 true，代表确实调通了上游接口。
+- `detail`：验证失败原因（如上游返回 401）。
+
+登录流程建议：先 `GET /auth/status`，`logged_in && (!verify || verified)` 为真就跳过登录，否则再走 `/auth/sms/start`。
+
+### 退出登录 / 切换账号
+
+服务始终只绑定**一个**账号。切换账号就是「先退出、再用新账号登录」：
+
+```bash
+# 1) 退出：清空内存 token 并删除 data/tokens.json
+curl -X POST http://127.0.0.1:8000/auth/logout
+# -> {"status":"ok","logged_in":false}
+
+# 2) 用新账号登录（短信流程，或直接用 token）
+curl -X POST http://127.0.0.1:8000/auth/sms/start \
+  -H "Content-Type: application/json" \
+  -d '{"phone_number": "+86 13900139000"}'
+# ... 手机收码后调 /auth/sms/confirm
+```
+
+说明：
+- 也可以**不退出**，直接重新登录覆盖旧 token（两者都会落盘到 `data/tokens.json`）。
+- 退出只清当前服务进程的凭据；若 `.env` 里填了 `ACCESS_TOKEN`，重启后会回落到它，需要一并清空。
+- **不要在上传/任务进行中切换账号**：进行中的请求会混用新旧 token。
 
 ### 文件管理
 
@@ -315,6 +364,8 @@ curl -X POST http://127.0.0.1:8000/upload/path \
 | POST | `/auth/sms/start` `/auth/sms/confirm` | 手机验证码登录（发码 + 提交验证码） |
 | POST | `/auth/token` | 使用 access_token / refresh_token 登录 |
 | POST | `/auth/refresh` | 手动刷新 access_token |
+| GET | `/auth/status` | 检查是否已登录（`?verify=true` 真实验证） |
+| POST | `/auth/logout` | 退出登录（清除凭据，用于切换账号） |
 | GET | `/auth/user` | 获取当前登录用户信息 |
 | POST | `/share/*` | 分享相关 |
 | POST | `/cloud/*` | 云下载相关 |
