@@ -129,7 +129,14 @@ def logout(client: ClientDep, settings: SettingsDep):
     response_model=SmsStartResponse,
 )
 def sms_start(body: SmsStartRequest, client: ClientDep):
-    init = client.login_sms_init(body.phone_number, body.captcha_token)
+    try:
+        init = client.login_sms_init(body.phone_number, body.captcha_token)
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
+        raise HTTPException(
+            status_code=502, detail=f"发送验证码失败(init): {exc}"
+        ) from exc
+    if not isinstance(init, dict):
+        raise HTTPException(status_code=502, detail=f"上游返回异常: {init!r}")
     captcha_token = init.get("captcha_token")
     if not captcha_token:
         return {
@@ -139,7 +146,14 @@ def sms_start(body: SmsStartRequest, client: ClientDep):
             "init": init,
         }
 
-    send = client.login_sms_send(body.phone_number, captcha_token, body.target)
+    try:
+        send = client.login_sms_send(body.phone_number, captcha_token, body.target)
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
+        raise HTTPException(
+            status_code=502, detail=f"发送验证码失败(send): {exc}"
+        ) from exc
+    if not isinstance(send, dict):
+        raise HTTPException(status_code=502, detail=f"上游返回异常: {send!r}")
     verification_id = send.get("verification_id")
     if not verification_id:
         return {"status": "failed", "init": init, "send": send}
@@ -176,17 +190,31 @@ def sms_confirm(body: SmsConfirmRequest, client: ClientDep):
             detail="session_id 无效或已过期（10 分钟），请重新调用 /auth/sms/start",
         )
 
-    verify = client.login_sms_verify(session.verification_id, body.code)
+    try:
+        verify = client.login_sms_verify(session.verification_id, body.code)
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
+        raise HTTPException(
+            status_code=502, detail=f"校验验证码失败: {exc}"
+        ) from exc
+    if not isinstance(verify, dict):
+        raise HTTPException(status_code=502, detail=f"上游返回异常: {verify!r}")
     verification_token = verify.get("verification_token")
     if not verification_token:
         return {"status": "failed", "verify": verify}
 
-    result = client.login_sms_signin(body.code, verification_token, session.phone_number)
+    try:
+        result = client.login_sms_signin(
+            body.code, verification_token, session.phone_number
+        )
+    except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
+        raise HTTPException(status_code=502, detail=f"登录失败: {exc}") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail=f"上游返回异常: {result!r}")
     if not result.get("access_token"):
         return {"status": "failed", "signin": result}
 
     delete_session(body.session_id)
-    return {"status": "ok", **result}
+    return {**result, "status": "ok"}
 
 
 @router.post(
