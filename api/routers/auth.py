@@ -1,3 +1,4 @@
+import re
 import time
 from typing import Optional
 
@@ -40,6 +41,21 @@ def _probe_login(client) -> tuple[bool, Optional[str], bool]:
 
 def _is_auth_error(info) -> bool:
     return isinstance(info, dict) and bool(info.get("error"))
+
+
+def _normalize_phone(phone_number: str) -> str:
+    """归一化为官网登录用的 `+86 1xxxxxxxxxx`（带空格）。
+
+    signin 的 username 必须与账号的规范格式一致，否则会返回
+    `invalid_account_or_password`。官网硬编码 ``"+86 " + 11位手机号``。
+    """
+    text = (phone_number or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if re.fullmatch(r"1\d{10}", digits):
+        return f"+86 {digits}"
+    if re.fullmatch(r"86(1\d{10})", digits):
+        return f"+86 {digits[2:]}"
+    return text
 
 
 
@@ -129,8 +145,9 @@ def logout(client: ClientDep, settings: SettingsDep):
     response_model=SmsStartResponse,
 )
 def sms_start(body: SmsStartRequest, client: ClientDep):
+    phone_number = _normalize_phone(body.phone_number)
     try:
-        init = client.login_sms_init(body.phone_number, body.captcha_token)
+        init = client.login_sms_init(phone_number, body.captcha_token)
     except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
         raise HTTPException(
             status_code=502, detail=f"发送验证码失败(init): {exc}"
@@ -147,7 +164,7 @@ def sms_start(body: SmsStartRequest, client: ClientDep):
         }
 
     try:
-        send = client.login_sms_send(body.phone_number, captcha_token, body.target)
+        send = client.login_sms_send(phone_number, captcha_token, body.target)
     except Exception as exc:  # noqa: BLE001 - 上游异常统一转 502，避免裸 500
         raise HTTPException(
             status_code=502, detail=f"发送验证码失败(send): {exc}"
@@ -158,14 +175,16 @@ def sms_start(body: SmsStartRequest, client: ClientDep):
     if not verification_id:
         return {"status": "failed", "init": init, "send": send}
 
+    is_user = send.get("is_user")
     session_id = create_session(
-        body.phone_number, captcha_token, verification_id, body.target
+        phone_number, captcha_token, verification_id, body.target, is_user
     )
     payload = decode_jwt_payload(verification_id) or {}
     return {
         "status": "sent",
         "session_id": session_id,
-        "phone": payload.get("p", body.phone_number),
+        "phone": payload.get("p", phone_number),
+        "is_user": is_user,
         "expires_in": send.get("expires_in"),
         "captcha_token": None,
         "url": None,
@@ -189,6 +208,17 @@ def sms_confirm(body: SmsConfirmRequest, client: ClientDep):
             status_code=400,
             detail="session_id 无效或已过期（10 分钟），请重新调用 /auth/sms/start",
         )
+
+    if session.is_user is False:
+        return {
+            "status": "failed",
+            "message": (
+                f"手机号 {session.phone_number} 未注册光鸭云盘账号，无法登录"
+                "（官网此场景走注册 signup，本接口只支持已注册账号登录）"
+            ),
+            "phone": session.phone_number,
+            "is_user": False,
+        }
 
     try:
         verify = client.login_sms_verify(session.verification_id, body.code)

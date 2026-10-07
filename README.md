@@ -303,6 +303,7 @@ curl -X POST http://127.0.0.1:8000/auth/sms/start \
 | `fs_document_list(...)` | `POST /files/documents` | 获取文档列表（全部目录） |
 | `fs_recycle_files(...)` | `POST /files/recycle` | 获取回收站文件列表 |
 | `fs_detail(file_id)` | `POST /files/detail` | 获取文件详情 |
+| （服务端实现） | `POST /files/find` | 按名称查找文件/文件夹，返回 id |
 | `fs_create_dir(dir_name, parent_id)` | `POST /files/mkdir` | 创建文件夹 |
 | `fs_copy(file_ids, parent_id)` | `POST /files/copy` | 复制文件 |
 | `fs_move(file_ids, parent_id)` | `POST /files/move` | 移动文件 |

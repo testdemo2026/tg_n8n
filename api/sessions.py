@@ -17,6 +17,7 @@ class SmsSession:
     verification_id: str
     target: str
     created_at: float
+    is_user: Optional[bool] = None
 
 
 def _purge() -> None:
@@ -27,7 +28,11 @@ def _purge() -> None:
 
 
 def create_session(
-    phone_number: str, captcha_token: str, verification_id: str, target: str
+    phone_number: str,
+    captcha_token: str,
+    verification_id: str,
+    target: str,
+    is_user: Optional[bool] = None,
 ) -> str:
     session_id = token_hex(8)
     with _lock:
@@ -38,6 +43,7 @@ def create_session(
             verification_id=verification_id,
             target=target,
             created_at=time(),
+            is_user=is_user,
         )
     return session_id
 

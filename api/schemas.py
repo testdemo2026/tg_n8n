@@ -267,6 +267,71 @@ class FileIdRequest(BaseModel):
     file_id: str = Field(..., description=FILE_ID_DESC)
 
 
+class FindByNameRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "test.mp4",
+                "res_type": 1,
+                "dir_id": "",
+            }
+        }
+    )
+
+    name: str = Field(
+        ...,
+        description="文件或文件夹名称（精确匹配）",
+        json_schema_extra={"example": "test.mp4"},
+    )
+    res_type: Optional[int] = Field(
+        None,
+        description="资源类型过滤（文件类型）：1 文件，2 文件夹（不传=两者都找）",
+        json_schema_extra={"example": 1},
+    )
+    dir_id: ParentId = Field(
+        None,
+        description=(
+            "在哪个目录下查找：不传 / 0 / 空串 = 根目录；传入具体目录 id 则在该目录下查找。"
+            "同一目录下名称唯一，不支持 '*'（全目录由 /files/list 提供）"
+        ),
+        json_schema_extra={"example": "1930348727118114862"},
+    )
+
+
+class FindByNameResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "exists": True,
+                "file_id": "1928031687445237826",
+                "name": "test.mp4",
+                "parent_id": 0,
+                "res_type": 1,
+                "is_dir": False,
+            }
+        }
+    )
+
+    exists: bool = Field(..., description="是否找到同名文件/文件夹")
+    file_id: Optional[str] = Field(
+        None, description="命中项的 ID（可直接用于 /files/detail、/download 等）；未找到为 null"
+    )
+    name: str = Field(..., description="查找的名称（未找到时回显请求值）")
+    parent_id: Union[int, str] = Field(
+        ...,
+        description=(
+            "所在父目录 ID；命中/未命中都返回实际查找的父目录，"
+            "根目录为 0"
+        ),
+    )
+    res_type: Optional[int] = Field(
+        None, description="资源类型（文件类型）：1 文件，2 文件夹；未找到为 null"
+    )
+    is_dir: Optional[bool] = Field(
+        None, description="是否文件夹（res_type==2）；未找到为 null"
+    )
+
+
 class CreateDirRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={"example": {"dir_name": "新建文件夹", "parent_id": ""}}

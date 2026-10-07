@@ -15,6 +15,8 @@ from ..schemas import (
     CopyMoveRequest,
     CreateDirRequest,
     FileIdRequest,
+    FindByNameRequest,
+    FindByNameResponse,
     FileIdsRequest,
     FilesListRequest,
     RecycleListRequest,
@@ -87,6 +89,61 @@ def files_recycle(body: RecycleListRequest, client: ClientDep):
 @router.post("/files/detail", summary="获取文件详情")
 def files_detail(body: FileIdRequest, client: ClientDep):
     return client.fs_detail(body.file_id)
+
+
+_FIND_PAGE_SIZE = 500
+_FIND_MAX_PAGES = 200
+
+
+@router.post(
+    "/files/find",
+    summary="按名称查找文件/文件夹（返回 id）",
+    description=(
+        "在指定目录下按名称**精确**查找文件或文件夹，返回其 "
+        "`file_id`、名称、父目录 id 及类型（文件类型）。\n\n"
+        "- `dir_id`：不传 / `0` / 空串 都表示**从根目录**查找；传入具体 id 则在该目录下查找\n"
+        "- 同一目录下名称唯一，因此最多命中一个；未找到时返回 `exists=false`\n"
+        "- 自动分页拉取该目录直到命中或遍历完\n"
+        "- `res_type`：`1` 只找文件，`2` 只找文件夹，不传则两者都找\n"
+        "- 返回的 `parent_id` 为实际查找的父目录，**根目录返回 `0`**"
+    ),
+    response_model=FindByNameResponse,
+)
+def files_find(body: FindByNameRequest, client: ClientDep):
+    parent = coerce_parent_id(body.dir_id)
+    page = 0
+    while page < _FIND_MAX_PAGES:
+        resp = client.fs_files(
+            parent_id=parent,
+            page=page,
+            page_size=_FIND_PAGE_SIZE,
+            res_type=body.res_type,
+        )
+        data = (resp or {}).get("data") or {}
+        items = data.get("list") or []
+        for item in items:
+            if item.get("fileName") == body.name:
+                res_type = item.get("resType")
+                return {
+                    "exists": True,
+                    "file_id": item.get("fileId"),
+                    "name": item.get("fileName"),
+                    "parent_id": item.get("parentId") or parent or 0,
+                    "res_type": res_type,
+                    "is_dir": res_type == 2 if res_type is not None else None,
+                }
+        total = data.get("total") or 0
+        page += 1
+        if not items or page * _FIND_PAGE_SIZE >= total:
+            break
+    return {
+        "exists": False,
+        "file_id": None,
+        "name": body.name,
+        "parent_id": parent or 0,
+        "res_type": None,
+        "is_dir": None,
+    }
 
 
 @router.post("/files/mkdir", summary="创建文件夹")
