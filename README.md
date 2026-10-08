@@ -314,6 +314,8 @@ curl -X POST http://127.0.0.1:8000/auth/sms/start \
 | `get_task_status(task_id)` | `POST /files/task/status` | 获取任务状态 |
 | `file_upload(...)` | `POST /upload` | 上传文件（multipart，自动秒传/分片） |
 | `file_upload(...)` | `POST /upload/path` | 按服务器本地路径上传（推荐大文件） |
+| （服务端异步） | `POST /upload/path/async` | 异步按路径上传，立即返回 `job_id` |
+| （服务端异步） | `GET /upload/status/{job_id}` | 查询异步上传任务状态 |
 | `download_url(file_id)` | `POST /download/url` | 获取文件下载直链 |
 | （服务端中转） | `GET /download/{file_id}` | 下载文件（流式转发） |
 
@@ -351,11 +353,48 @@ curl -X POST http://127.0.0.1:8000/upload/path \
 | `UPLOAD_TMP_DIR` | `data/tmp` | multipart 临时目录；放数据盘，避免写满 `/tmp` |
 | `UPLOAD_ROOT` | 空 | `/upload/path` 允许访问的根目录；留空不限制 |
 | `MAX_CONCURRENT_UPLOADS` | `2` | 同时进行的上传数，避免并发占满小内存 |
+| `MAX_UPLOAD_JOBS` | `20` | 异步上传（`/upload/path/async`）同时在册任务数上限 |
+| `UPLOAD_JOB_TTL` | `3600` | 异步任务结束后结果保留秒数，过期清理 |
 
 建议：
 - 1GB+ 文件优先用 `POST /upload/path`：不经过 multipart，省掉一份落盘拷贝。
 - 若用 `POST /upload`（multipart），注意流量会先由 Starlette 落盘一次、再拷到 `UPLOAD_TMP_DIR` 一次，瞬时约占 2× 文件大小的磁盘。
 - 稳妥起见把 `UPLOAD_ROOT` 设为实际共享目录（如容器里的 `/data/incoming`），避免任意文件被读取。
+
+### 大文件异步上传（n8n / 2GB+ 推荐）
+
+`POST /upload/path` 是**同步阻塞**的：要等分片全部传完才返回响应。n8n 的 HTTP Request 节点
+默认超时 5 分钟（`300000ms`），2GB+ 文件很容易跑过，于是报
+`timeout of 300000ms exceeded`（`ECONNABORTED`）。这不是光鸭的接口限制，改用异步接口即可解决：
+
+```bash
+# 1) 发起：立即拿到 job_id（参数与 /upload/path 完全一致）
+curl -X POST http://127.0.0.1:8000/upload/path/async \
+  -H "Content-Type: application/json" \
+  -d '{"file_path": "/var/lib/telegram-bot-api/xxx/file.mp4", "parent_id": ""}'
+# -> {"job_id":"9f2c...","status":"pending","meta":{...}}
+
+# 2) 轮询：status 为 pending/running 时继续等，succeeded 时 result 即上传结果
+curl http://127.0.0.1:8000/upload/status/9f2c...
+# -> {"job_id":"9f2c...","status":"running","elapsed":42.1,...}
+# -> {"job_id":"9f2c...","status":"succeeded","result":{...}}
+# -> {"job_id":"9f2c...","status":"failed","error":"上游接口错误: ..."}
+```
+
+- 任务在**后台线程**执行，受 `MAX_CONCURRENT_UPLOADS`（并发）和 `MAX_UPLOAD_JOBS`（在册上限）约束。
+- 任务结束后结果保留 `UPLOAD_JOB_TTL` 秒（默认 1 小时），过期查询返回 404。
+- 在册任务过多时提交会返回 `429`。
+
+n8n 侧改法（把原来那一个 HTTP 节点拆成「发起 + 轮询」）：
+
+1. HTTP Request（POST `http://guangya-api:8000/upload/path/async`，JSON body 同前），拿到 `job_id`。
+2. **Wait** 节点，间隔 `30000`ms 左右（给 n8n 加 `N8N_DEFAULT_BINARY_DATA_MODE=filesystem`，大文件走磁盘）。
+3. HTTP Request（GET `.../upload/status/{{ $json.job_id }}`）。
+4. **IF**：`status === 'succeeded'` → 成功分支；`status === 'failed'` → 错误分支输出 `error`；
+   否则（`pending`/`running`）连回第 2 步继续等。
+
+这样每次 HTTP 请求都是秒回，彻底绕开 n8n 的 5 分钟超时。若仍想用同步接口，也可把
+HTTP Request 节点 Options → **Timeout** 调大（如 `3600000`），但长连接更长更脆弱，不推荐。
 
 ### 其他接口
 

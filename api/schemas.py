@@ -426,6 +426,44 @@ class UploadPathRequest(BaseModel):
     )
 
 
+class UploadJobResponse(BaseModel):
+    """异步上传任务的状态（提交后 / 轮询 /upload/status/{job_id} 都返回此结构）。"""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "job_id": "9f2c0b6a4e1d4c8f9a3b2c1d0e5f6a7b",
+                "status": "running",
+                "created_at": 1760000000.0,
+                "started_at": 1760000000.1,
+                "finished_at": None,
+                "elapsed": 42.3,
+                "result": None,
+                "error": None,
+                "error_type": None,
+                "meta": {"file_path": "/data/incoming/movie.mp4", "name": "movie.mp4"},
+            }
+        }
+    )
+
+    job_id: str = Field(..., description="异步任务 ID")
+    status: str = Field(
+        ..., description="pending=排队中；running=上传中；succeeded=成功；failed=失败"
+    )
+    created_at: Optional[float] = Field(None, description="提交时间戳（秒）")
+    started_at: Optional[float] = Field(None, description="开始执行时间戳（秒）")
+    finished_at: Optional[float] = Field(None, description="结束时间戳（秒）")
+    elapsed: Optional[float] = Field(None, description="已耗时 / 总耗时（秒）")
+    result: Optional[Any] = Field(
+        None, description="上传结果（status=succeeded 时同 /upload/path 的返回）"
+    )
+    error: Optional[str] = Field(None, description="失败原因（status=failed 时）")
+    error_type: Optional[str] = Field(None, description="失败异常类型")
+    meta: Dict[str, Any] = Field(
+        default_factory=dict, description="任务元信息（file_path / name / parent_id 等）"
+    )
+
+
 # ===== Cloud download =====
 
 

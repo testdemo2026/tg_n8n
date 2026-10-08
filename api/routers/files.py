@@ -11,6 +11,7 @@ from starlette.responses import StreamingResponse
 
 from ..config import Settings
 from ..dependencies import ClientDep, SettingsDep
+from ..jobs import JobStore
 from ..schemas import (
     CopyMoveRequest,
     CreateDirRequest,
@@ -23,6 +24,7 @@ from ..schemas import (
     RenameRequest,
     TaskIdRequest,
     TypeListRequest,
+    UploadJobResponse,
     UploadPathRequest,
 )
 from ..utils import coerce_file_ids, coerce_parent_id, find_url
@@ -329,6 +331,21 @@ def _run_upload(client, path, name, parent_id, content_type, chunk_size, setting
             ) from exc
 
 
+_job_store_lock = threading.Lock()
+_job_store: Optional[JobStore] = None
+
+
+def _upload_job_store(settings: Settings) -> JobStore:
+    global _job_store
+    with _job_store_lock:
+        if _job_store is None:
+            _job_store = JobStore(
+                ttl=settings.upload_job_ttl,
+                max_jobs=settings.max_upload_jobs,
+            )
+        return _job_store
+
+
 @router.post("/upload", summary="上传文件（multipart，自动秒传/分片）")
 def upload(
     client: ClientDep,
@@ -386,3 +403,67 @@ def upload_by_path(body: UploadPathRequest, client: ClientDep, settings: Setting
         size,
         settings,
     )
+
+
+@router.post(
+    "/upload/path/async",
+    response_model=UploadJobResponse,
+    summary="异步按路径上传（立即返回 job_id，用 /upload/status 轮询）",
+    description=(
+        "参数与 `/upload/path` 相同，但**立即返回** `job_id`（status=pending），"
+        "上传在后台进行；再用 `GET /upload/status/{job_id}` 轮询，"
+        "直到 status 变为 `succeeded` / `failed`。\n\n"
+        "适合 2GB+ 大文件：避免 n8n 等客户端因单次请求超时（默认 5 分钟）而中断。"
+    ),
+)
+def upload_by_path_async(
+    body: UploadPathRequest, client: ClientDep, settings: SettingsDep
+):
+    path = _resolve_upload_path(body.file_path, settings)
+    file_name = _clean_form(body.name) or path.name
+    mime = (
+        _clean_form(body.content_type)
+        or mimetypes.guess_type(str(path))[0]
+        or "application/octet-stream"
+    )
+    size = _resolve_chunk_size(body.chunk_size, settings)
+    parent = coerce_parent_id(body.parent_id)
+    store = _upload_job_store(settings)
+
+    def _task():
+        return _run_upload(client, path, file_name, parent, mime, size, settings)
+
+    try:
+        job = store.submit(
+            _task,
+            meta={
+                "file_path": str(path),
+                "name": file_name,
+                "parent_id": parent,
+                "chunk_size": size,
+            },
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+    return store.snapshot(job)
+
+
+@router.get(
+    "/upload/status/{job_id}",
+    response_model=UploadJobResponse,
+    summary="查询异步上传任务状态",
+    description=(
+        "查询 `/upload/path/async` 提交的任务。`status`："
+        "pending=排队中；running=上传中；succeeded=成功（`result` 为上传结果）；"
+        "failed=失败（`error` 为原因）。任务结束超过 TTL（默认 1 小时）后返回 404。"
+    ),
+)
+def upload_status(job_id: str, settings: SettingsDep):
+    store = _upload_job_store(settings)
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail=f"任务不存在或已过期: {job_id}"
+        )
+    return store.snapshot(job)

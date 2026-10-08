@@ -48,6 +48,17 @@ class Settings(BaseSettings):
         2,
         description="同时进行的上传任务上限，避免 1GB 内存的小机器被并发占满。",
     )
+    max_upload_jobs: int = Field(
+        20,
+        description=(
+            "异步上传（/upload/path/async）同时在册的任务上限（排队 + 运行中）。"
+            "超过则拒绝新任务，避免小机器被大量后台线程拖垮。"
+        ),
+    )
+    upload_job_ttl: float = Field(
+        3600.0,
+        description="异步上传任务结束后结果保留时长（秒），过期自动清理。",
+    )
 
 
 @lru_cache
