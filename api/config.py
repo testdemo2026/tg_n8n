@@ -40,6 +40,13 @@ class Settings(BaseSettings):
         "data/tmp",
         description="分片上传临时目录；放数据盘，避免写满 /tmp。留空则用系统临时目录。",
     )
+    upload_retries: int = Field(
+        3,
+        description=(
+            "上传请求遇到网络类错误（如 OSS 断开连接 RemoteProtocolError）时的重试次数。"
+            "每次重试间隔指数退避，最大 5 秒。"
+        ),
+    )
     upload_root: Optional[str] = Field(
         None,
         description="按路径上传时允许访问的根目录；留空不限制（仅内网 + API_KEY 保护）。",

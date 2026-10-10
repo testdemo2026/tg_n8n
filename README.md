@@ -350,6 +350,7 @@ curl -X POST http://127.0.0.1:8000/upload/path \
 |------|------|------|
 | `UPLOAD_CHUNK_SIZE` | `8388608`（8MB） | 分片大小；1GB 文件约 128 片，内存占用可控 |
 | `UPLOAD_TIMEOUT` | `300` | 上传读写超时（秒）。httpx 默认仅 5 秒，大文件会被中断 |
+| `UPLOAD_RETRIES` | `3` | 上传遇到网络类错误（如 OSS 断开连接）时的重试次数 |
 | `UPLOAD_TMP_DIR` | `data/tmp` | multipart 临时目录；放数据盘，避免写满 `/tmp` |
 | `UPLOAD_ROOT` | 空 | `/upload/path` 允许访问的根目录；留空不限制 |
 | `MAX_CONCURRENT_UPLOADS` | `2` | 同时进行的上传数，避免并发占满小内存 |

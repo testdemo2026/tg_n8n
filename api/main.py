@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     client = PersistentGuangyaClient(
         on_change=lambda c: persist_tokens(c, settings),
         timeout=settings.upload_timeout,
+        retries=settings.upload_retries,
         access_token=tokens.get("access_token") or settings.access_token or None,
         refresh_token=tokens.get("refresh_token") or settings.refresh_token or None,
         device_id=tokens.get("device_id") or settings.device_id or None,

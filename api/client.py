@@ -1,3 +1,4 @@
+import time
 from typing import Callable, Optional
 
 import httpx
@@ -11,6 +12,7 @@ class PersistentGuangyaClient(GuangyaClient):
         self,
         on_change: Callable[["PersistentGuangyaClient"], None],
         timeout: Optional[float] = None,
+        retries: int = 3,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -18,6 +20,7 @@ class PersistentGuangyaClient(GuangyaClient):
             self._client.timeout = httpx.Timeout(
                 connect=10.0, read=timeout, write=timeout, pool=10.0
             )
+        self._retries = max(1, retries)
         self._on_change = on_change
         self._snapshot = self._state()
 
@@ -64,10 +67,17 @@ class PersistentGuangyaClient(GuangyaClient):
         self._persist_if_changed()
 
     def request(self, *args, **kwargs):
-        try:
-            return super().request(*args, **kwargs)
-        finally:
-            self._persist_if_changed()
+        last_exc: Optional[httpx.TransportError] = None
+        for attempt in range(self._retries):
+            try:
+                return super().request(*args, **kwargs)
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt + 1 < self._retries:
+                    time.sleep(min(2**attempt, 5))
+            finally:
+                self._persist_if_changed()
+        raise last_exc
 
     def refresh_token(self, refresh_token: Optional[str] = None):
         try:
